@@ -1,791 +1,462 @@
 import * as cheerio from 'cheerio';
 
-const BASE_URL = 'https://otakudesu.blog';
-
-const USER_AGENTS = [
+const BASE = 'https://otakudesu.blog';
+const UAS = [
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
   'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:133.0) Gecko/20100101 Firefox/133.0',
   'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7; rv:133.0) Gecko/20100101 Firefox/133.0',
   'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
-  'Mozilla/5.0 (X11; Linux x86_64; rv:133.0) Gecko/20100101 Firefox/133.0',
   'Mozilla/5.0 (iPhone; CPU iPhone OS 17_6_1 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.6 Mobile/15E148 Safari/604.1',
-  'Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.104 Mobile Safari/537.36',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36 Edg/131.0.2903.70',
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36'
+  'Mozilla/5.0 (Linux; Android 14; SM-S921B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.6778.104 Mobile Safari/537.36'
 ];
 
-let uaIndex = 0;
+let uaI = 0;
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+const rnd = (a = 300, b = 800) => sleep(Math.floor(Math.random() * (b - a + 1)) + a);
 
-class CookieJar {
-  constructor() {
-    this.cookies = {};
-  }
+function hdr(ref) {
+  const ua = UAS[uaI++ % UAS.length];
+  const mobile = /Mobile|iPhone|Android/.test(ua);
+  const plat = ua.includes('Windows') ? 'Windows' : ua.includes('Mac') ? 'macOS' : 'Linux';
+  return {
+    'User-Agent': ua,
+    Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+    'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
+    Referer: ref || BASE + '/',
+    'Sec-Ch-Ua': ua.includes('Chrome') ? '"Google Chrome"' : '"Chromium"',
+    'Sec-Ch-Ua-Mobile': mobile ? '?1' : '?0',
+    'Sec-Ch-Ua-Platform': `"${plat}"`,
+    'Upgrade-Insecure-Requests': '1'
+  };
+}
 
-  update(setCookie) {
-    if (!setCookie || !setCookie.length) return;
-    for (const cookieStr of setCookie) {
-      const parts = cookieStr.split(';')[0].split('=');
-      if (parts.length >= 2) {
-        const key = parts[0].trim();
-        const value = parts.slice(1).join('=').trim();
-        this.cookies[key] = value;
+class Cookies {
+  constructor() { this.c = {}; }
+  load(h) {
+    if (!h) return;
+    const arr = typeof h.getSetCookie === 'function' ? h.getSetCookie() : [h.get('set-cookie')];
+    for (const line of arr) {
+      if (!line) continue;
+      for (const piece of line.split(/,(?=[^ ])/)) {
+        const [kv] = piece.split(';');
+        const [k, ...v] = kv.split('=');
+        if (k && v.length) this.c[k.trim()] = v.join('=').trim();
       }
     }
   }
-
-  getString() {
-    return Object.entries(this.cookies)
-      .map(([k, v]) => `${k}=${v}`)
-      .join('; ');
-  }
-
-  clear() {
-    this.cookies = {};
-  }
+  str() { return Object.entries(this.c).map(([k, v]) => `${k}=${v}`).join('; '); }
 }
 
-function randomDelay(min = 300, max = 800) {
-  return new Promise(resolve => setTimeout(resolve, Math.floor(Math.random() * (max - min + 1)) + min));
-}
-
-function getHeaders(ref = BASE_URL, cookie = '') {
-  const ua = USER_AGENTS[uaIndex % USER_AGENTS.length];
-  uaIndex++;
-  const isMobile = ua.includes('Mobile') || ua.includes('iPhone') || ua.includes('Android');
-  const platform = ua.includes('Windows') ? 'Windows' : ua.includes('Mac') ? 'macOS' : 'Linux';
-  const headers = {
-    'User-Agent': ua,
-    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
-    'Accept-Language': 'id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Referer': ref || BASE_URL,
-    'Cache-Control': 'no-cache',
-    'Pragma': 'no-cache',
-    'DNT': '1',
-    'Sec-Ch-Ua': `"${ua.includes('Chrome') ? 'Google Chrome' : 'Chromium'}"`,
-    'Sec-Ch-Ua-Mobile': isMobile ? '?1' : '?0',
-    'Sec-Ch-Ua-Platform': `"${platform}"`,
-    'Sec-Fetch-Dest': 'document',
-    'Sec-Fetch-Mode': 'navigate',
-    'Sec-Fetch-Site': 'same-origin',
-    'Sec-Fetch-User': '?1',
-    'Upgrade-Insecure-Requests': '1',
-    'Connection': 'keep-alive'
-  };
-  if (cookie) headers['Cookie'] = cookie;
-  return headers;
-}
-
-const getSetCookie = (res) => {
-  if (typeof res.headers.getSetCookie === 'function') return res.headers.getSetCookie();
-  const single = res.headers.get('set-cookie');
-  return single ? [single] : [];
-};
-
-async function request(method, url, body = null, headers = {}, retries = 5) {
+async function req(url, opts = {}, retries = 5) {
   for (let i = 0; i < retries; i++) {
     try {
-      await randomDelay(300, 800);
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 30000);
-      try {
-        const res = await fetch(url, {
-          method,
-          headers,
-          body: body || undefined,
-          redirect: 'follow',
-          signal: controller.signal
-        });
-        if (res.status >= 400) throw new Error(`HTTP ${res.status}`);
-        const setCookie = getSetCookie(res);
-        const text = await res.text();
-        return { text, setCookie };
-      } finally {
-        clearTimeout(timer);
-      }
+      await rnd();
+      const res = await fetch(url, {
+        method: opts.method || 'GET',
+        headers: opts.headers || {},
+        body: opts.body,
+        redirect: 'follow',
+        signal: AbortSignal.timeout(30000)
+      });
+      if (res.status >= 200 && res.status < 400) return res;
+      if (i === retries - 1) throw new Error(`HTTP ${res.status}`);
     } catch (e) {
-      if (i < retries - 1) await randomDelay(1500, 4000);
-      else throw e;
+      if (i === retries - 1) throw e;
     }
+    await sleep(1500 + Math.random() * 2500);
   }
 }
 
 class OtakudesuScraper {
-  constructor() {
-    this.base = BASE_URL;
-    this.creator = 'rynaqrtz';
-    this.cookieJar = new CookieJar();
+  constructor() { this.base = BASE; this.creator = 'rynaqrtz'; this.cj = new Cookies(); }
+
+  async _html(url) {
+    const r = await req(url, { headers: { ...hdr(url), ...(this.cj.str() ? { Cookie: this.cj.str() } : {}) } });
+    this.cj.load(r.headers);
+    return r.text();
   }
 
-  async _fetchHTML(url, retries = 5) {
-    const headers = getHeaders(url, this.cookieJar.getString());
-    const { text, setCookie } = await request('GET', url, null, headers, retries);
-    this.cookieJar.update(setCookie);
-    return text;
-  }
-
-  async _fetchJSON(url, retries = 5) {
-    const headers = getHeaders(url, this.cookieJar.getString());
-    const { text, setCookie } = await request('GET', url, null, headers, retries);
-    this.cookieJar.update(setCookie);
-    try { return JSON.parse(text); } catch { return text; }
-  }
-
-  async _postAjax(payload, retries = 5) {
-    const params = new URLSearchParams(payload);
-    const url = `${this.base}/wp-admin/admin-ajax.php`;
+  async _ajax(payload) {
+    const body = new URLSearchParams(payload).toString();
     const headers = {
-      ...getHeaders(this.base, this.cookieJar.getString()),
+      ...hdr(BASE),
       'X-Requested-With': 'XMLHttpRequest',
-      'Content-Type': 'application/x-www-form-urlencoded'
+      'Content-Type': 'application/x-www-form-urlencoded',
+      ...(this.cj.str() ? { Cookie: this.cj.str() } : {})
     };
-    const { text, setCookie } = await request('POST', url, params.toString(), headers, retries);
-    this.cookieJar.update(setCookie);
-    return text;
+    const r = await req(`${this.base}/wp-admin/admin-ajax.php`, { method: 'POST', headers, body });
+    this.cj.load(r.headers);
+    return r.json().catch(() => null);
   }
 
-  _clean(obj) {
-    if (obj === null || obj === undefined) return undefined;
-    if (Array.isArray(obj)) return obj.map(i => this._clean(i));
-    if (typeof obj === 'object') {
-      const result = {};
-      for (const key of Object.keys(obj)) {
-        const val = this._clean(obj[key]);
-        if (val !== undefined) result[key] = val;
+  _clean(o) {
+    if (o === null || o === undefined) return undefined;
+    if (Array.isArray(o)) return o.map((i) => this._clean(i));
+    if (typeof o === 'object') {
+      const out = {};
+      for (const k of Object.keys(o)) {
+        const v = this._clean(o[k]);
+        if (v !== undefined) out[k] = v;
       }
-      return Object.keys(result).length ? result : undefined;
+      return Object.keys(out).length ? out : undefined;
     }
-    return obj;
+    return o;
   }
 
-  _buildResponse(page, url, data) {
-    return this._clean({
-      creator: this.creator,
-      page,
-      url,
-      data
-    });
-  }
+  _wrap(page, url, data) { return this._clean({ creator: this.creator, page, url, data }); }
 
-  _parsePagination($) {
-    const result = { current: 1, next: null, hasNext: false, total: null };
-    const pageLinks = [];
+  _b64(s) { try { return atob(s); } catch { return ''; } }
+
+  _pag($) {
+    const r = { current: 1, next: null, hasNext: false, total: null };
+    const links = [];
     $('.pagination a, .pagination span, .page-numbers, .pagenavix a, .pagenavix span').each((i, el) => {
       const href = $(el).attr('href');
       const text = $(el).text().trim();
-      if (href) pageLinks.push({ text, href });
+      if (href) links.push({ text, href });
     });
-    const numbers = pageLinks.filter(l => /^\d+$/.test(l.text)).map(l => parseInt(l.text));
-    if (numbers.length) result.total = Math.max(...numbers);
-    const current = $('.pagination .page-numbers.current, .pagenavix .page-numbers.current').first();
-    if (current.length) {
-      const t = current.text().trim();
-      if (/^\d+$/.test(t)) result.current = parseInt(t);
+    const nums = links.filter((l) => /^\d+$/.test(l.text)).map((l) => parseInt(l.text));
+    if (nums.length) r.total = Math.max(...nums);
+    const cur = $('.pagination .page-numbers.current, .pagenavix .page-numbers.current').first();
+    if (cur.length) {
+      const t = cur.text().trim();
+      if (/^\d+$/.test(t)) r.current = parseInt(t);
     }
-    if (result.total && result.current < result.total) {
-      result.hasNext = true;
-      const nextLink = pageLinks.find(l => l.text === 'Next' || l.text === '»' || l.text.toLowerCase().includes('next'));
-      if (nextLink && nextLink.href) {
-        result.next = nextLink.href.startsWith('http') ? nextLink.href : this.base + nextLink.href;
-      }
+    if (r.total && r.current < r.total) {
+      r.hasNext = true;
+      const nx = links.find((l) => /next|»/i.test(l.text));
+      if (nx?.href) r.next = nx.href.startsWith('http') ? nx.href : this.base + nx.href;
     }
-    return result;
+    return r;
   }
 
-  _parseCardDetpost($, element) {
-    const $el = $(element);
-    const link = $el.find('.thumb a').attr('href');
-    const title = $el.find('.jdlflm').text().trim();
-    const poster = $el.find('.thumbz img').attr('src') || null;
-    const episode = $el.find('.epz').text().trim() || null;
-    const day = $el.find('.epztipe').text().trim() || null;
-    const date = $el.find('.newnime').text().trim() || null;
+  _cardDet($, el) {
+    const $e = $(el);
+    const link = $e.find('.thumb a').attr('href');
+    const title = $e.find('.jdlflm').text().trim();
     if (!link || !title) return null;
     return {
       title,
       url: link.startsWith('http') ? link : this.base + link,
-      poster,
-      episode,
-      day,
-      date
+      poster: $e.find('.thumbz img').attr('src') || null,
+      episode: $e.find('.epz').text().trim() || null,
+      day: $e.find('.epztipe').text().trim() || null,
+      date: $e.find('.newnime').text().trim() || null
     };
   }
 
-  _parseCardColAnime($, element) {
-    const $el = $(element);
-    const link = $el.find('.col-anime-title a').attr('href');
-    const title = $el.find('.col-anime-title a').text().trim();
-    const studio = $el.find('.col-anime-studio').text().trim() || null;
-    const eps = $el.find('.col-anime-eps').text().trim() || null;
-    const rating = $el.find('.col-anime-rating').text().trim() || null;
-    const genres = $el.find('.col-anime-genre a').map((_, a) => $(a).text()).get() || [];
-    const poster = $el.find('.col-anime-cover img').attr('src') || null;
-    const synopsis = $el.find('.col-synopsis p').text().trim() || null;
-    const season = $el.find('.col-anime-date').text().trim() || null;
+  _cardCol($, el) {
+    const $e = $(el);
+    const link = $e.find('.col-anime-title a').attr('href');
+    const title = $e.find('.col-anime-title a').text().trim();
     if (!link || !title) return null;
     return {
       title,
       url: link.startsWith('http') ? link : this.base + link,
-      studio,
-      episodes: eps,
-      rating,
-      genres,
-      poster,
-      synopsis,
-      season
+      studio: $e.find('.col-anime-studio').text().trim() || null,
+      episodes: $e.find('.col-anime-eps').text().trim() || null,
+      rating: $e.find('.col-anime-rating').text().trim() || null,
+      genres: $e.find('.col-anime-genre a').map((_, a) => $(a).text()).get(),
+      poster: $e.find('.col-anime-cover img').attr('src') || null,
+      synopsis: $e.find('.col-synopsis p').text().trim() || null,
+      season: $e.find('.col-anime-date').text().trim() || null
     };
   }
 
-  _parseGenreList($) {
-    const genres = [];
+  _genres($) {
+    const out = [];
     $('.genres li a').each((i, el) => {
-      const $el = $(el);
-      const name = $el.text().trim();
-      const link = $el.attr('href');
-      if (name && link) {
-        const slug = link.replace(/\/genres\/([^\/]+)\/?/, '$1');
-        genres.push({ name, slug, url: link.startsWith('http') ? link : this.base + link });
-      }
+      const $e = $(el);
+      const name = $e.text().trim();
+      const href = $e.attr('href');
+      if (name && href) out.push({ name, slug: href.replace(/\/genres\/([^/]+)\/?/, '$1'), url: href.startsWith('http') ? href : this.base + href });
     });
-    return genres;
+    return out;
   }
 
-  _parseSchedule($) {
-    const schedule = {};
+  _sched($) {
+    const out = {};
     $('.kglist321').each((i, el) => {
-      const $el = $(el);
-      const day = $el.find('h2').text().trim();
+      const $e = $(el);
+      const day = $e.find('h2').text().trim();
       const items = [];
-      $el.find('ul li a').each((j, a) => {
+      $e.find('ul li a').each((j, a) => {
         const $a = $(a);
-        items.push({
-          title: $a.text().trim(),
-          url: $a.attr('href').startsWith('http') ? $a.attr('href') : this.base + $a.attr('href')
-        });
+        const href = $a.attr('href');
+        if (href) items.push({ title: $a.text().trim(), url: href.startsWith('http') ? href : this.base + href });
       });
-      if (day && items.length) schedule[day] = items;
+      if (day && items.length) out[day] = items;
     });
-    return schedule;
+    return out;
   }
 
-  _parseEpisodeList($) {
-    const episodes = [];
+  _epList($) {
+    const out = [];
     $('.episodelist ul li').each((i, el) => {
-      const $el = $(el);
-      const $a = $el.find('a');
+      const $e = $(el);
+      const $a = $e.find('a');
       const title = $a.text().trim();
       const href = $a.attr('href');
-      const date = $el.find('.zeebr').text().trim() || null;
       if (href && title) {
-        const match = href.match(/\/episode\/([^\/]+)\/?$/);
-        episodes.push({
-          title,
-          episodeId: match ? match[1] : null,
-          url: href.startsWith('http') ? href : this.base + href,
-          releaseDate: date
-        });
+        const m = href.match(/\/episode\/([^/]+)\/?$/);
+        out.push({ title, episodeId: m ? m[1] : null, url: href.startsWith('http') ? href : this.base + href, releaseDate: $e.find('.zeebr').text().trim() || null });
       }
     });
-    return episodes;
+    return out;
   }
 
-  _extractPostId($) {
+  _postId($) {
     const ids = new Set();
     $('[data-content]').each((i, el) => {
-      const content = $(el).attr('data-content');
-      if (content) {
+      const c = $(el).attr('data-content');
+      if (c) {
         try {
-          const decoded = Buffer.from(content, 'base64').toString('utf-8');
-          const parsed = JSON.parse(decoded);
-          if (parsed.id) ids.add(parsed.id);
-        } catch (e) {}
+          const p = JSON.parse(this._b64(c));
+          if (p.id) ids.add(p.id);
+        } catch {}
       }
     });
     $('[id^="post-"]').each((i, el) => {
-      const id = $(el).attr('id');
-      const match = id.match(/post-(\d+)/);
-      if (match) ids.add(parseInt(match[1]));
+      const m = ($(el).attr('id') || '').match(/post-(\d+)/);
+      if (m) ids.add(parseInt(m[1]));
     });
     const html = $.html();
-    const scriptMatches = html.match(/post[_\s]*id[_\s]*[:=]\s*["']?(\d+)["']?/gi);
-    if (scriptMatches) {
-      scriptMatches.forEach(m => {
-        const num = m.match(/\d+/);
-        if (num) ids.add(parseInt(num[0]));
-      });
-    }
-    return ids.size > 0 ? [...ids][0] : null;
+    const sm = html.match(/post[_\s]*id[_\s]*[:=]\s*["']?(\d+)["']?/gi);
+    if (sm) sm.forEach((x) => { const n = x.match(/\d+/); if (n) ids.add(parseInt(n[0])); });
+    return ids.size ? [...ids][0] : null;
   }
 
-  async _getNonce() {
-    try {
-      const res = await this._postAjax({ action: 'aa1208d27f29ca340c92c66d1926f13f' });
-      return res || null;
-    } catch (e) {
-      return null;
-    }
+  async _nonce() {
+    try { const r = await this._ajax({ action: 'aa1208d27f29ca340c92c66d1926f13f' }); return r?.data || null; } catch { return null; }
   }
 
-  async _getStreamUrl(postId, index, quality, nonce) {
-    const payload = {
-      action: '2a3505c93b0035d3f455df82bf976b84',
-      id: postId,
-      i: index,
-      q: quality,
-      nonce
-    };
+  async _streamUrl(id, i, q, nonce) {
     try {
-      const res = await this._postAjax(payload);
-      if (!res) return null;
-      const html = Buffer.from(res, 'base64').toString('utf-8');
-      const $ = cheerio.load(html);
+      const r = await this._ajax({ action: '2a3505c93b0035d3f455df82bf976b84', id, i, q, nonce });
+      if (!r?.data) return null;
+      const $ = cheerio.load(this._b64(r.data));
       return $('iframe').attr('src') || null;
-    } catch (e) {
-      return null;
-    }
+    } catch { return null; }
   }
 
-  async _extractStreams(html) {
+  async _streams(html) {
     const $ = cheerio.load(html);
-    const postId = this._extractPostId($);
-    if (!postId) return {};
-    const nonce = await this._getNonce();
+    const pid = this._postId($);
+    if (!pid) return {};
+    const nonce = await this._nonce();
     if (!nonce) return {};
-    const streams = {};
+    const jobs = {};
     $('.mirrorstream ul').each((i, ul) => {
-      const $ul = $(ul);
-      $ul.find('a').each((j, a) => {
+      $(ul).find('a').each((j, a) => {
         const $a = $(a);
-        const dataContent = $a.attr('data-content');
-        if (dataContent) {
+        const dc = $a.attr('data-content');
+        if (dc) {
           try {
-            const decoded = Buffer.from(dataContent, 'base64').toString('utf-8');
-            const parsed = JSON.parse(decoded);
-            if (parsed.id === postId) {
-              const key = `${parsed.q}_${$a.text().trim()}`;
-              streams[key] = { postId, i: parsed.i, q: parsed.q, nonce };
-            }
-          } catch (e) {}
+            const p = JSON.parse(this._b64(dc));
+            if (p.id === pid) jobs[`${p.q}_${$a.text().trim()}`] = { id: p.id, i: p.i, q: p.q, nonce };
+          } catch {}
         }
       });
     });
-    const result = {};
-    for (const [key, params] of Object.entries(streams)) {
-      const url = await this._getStreamUrl(params.postId, params.i, params.q, params.nonce);
-      if (url) result[key] = url;
+    const out = {};
+    for (const [k, p] of Object.entries(jobs)) {
+      const u = await this._streamUrl(p.id, p.i, p.q, p.nonce);
+      if (u) out[k] = u;
     }
-    return result;
+    return out;
   }
 
   async home() {
     const url = this.base + '/';
-    const html = await this._fetchHTML(url);
-    const $ = cheerio.load(html);
+    const $ = cheerio.load(await this._html(url));
     const items = [];
-    $('.detpost:has(.epz:contains("Episode"))').each((i, el) => {
-      const card = this._parseCardDetpost($, el);
-      if (card) items.push(card);
-    });
-    return this._buildResponse('home', url, { items });
+    $('.detpost:has(.epz:contains("Episode"))').each((i, el) => { const c = this._cardDet($, el); if (c) items.push(c); });
+    return this._wrap('home', url, { items });
   }
 
   async ongoing(page = 1) {
     const url = page === 1 ? this.base + '/ongoing-anime/' : this.base + `/ongoing-anime/page/${page}/`;
-    const html = await this._fetchHTML(url);
-    const $ = cheerio.load(html);
+    const $ = cheerio.load(await this._html(url));
     const items = [];
-    $('.detpost').each((i, el) => {
-      const card = this._parseCardDetpost($, el);
-      if (card) items.push(card);
-    });
-    const pagination = this._parsePagination($);
-    return this._buildResponse('ongoing', url, { pagination, items });
+    $('.detpost').each((i, el) => { const c = this._cardDet($, el); if (c) items.push(c); });
+    return this._wrap('ongoing', url, { pagination: this._pag($), items });
   }
 
   async complete(page = 1) {
     const url = page === 1 ? this.base + '/complete-anime/' : this.base + `/complete-anime/page/${page}/`;
-    const html = await this._fetchHTML(url);
-    const $ = cheerio.load(html);
+    const $ = cheerio.load(await this._html(url));
     const items = [];
-    $('.detpost').each((i, el) => {
-      const card = this._parseCardDetpost($, el);
-      if (card) items.push(card);
-    });
-    const pagination = this._parsePagination($);
-    return this._buildResponse('complete', url, { pagination, items });
+    $('.detpost').each((i, el) => { const c = this._cardDet($, el); if (c) items.push(c); });
+    return this._wrap('complete', url, { pagination: this._pag($), items });
   }
 
   async genreList() {
     const url = this.base + '/genre-list/';
-    const html = await this._fetchHTML(url);
-    const $ = cheerio.load(html);
-    const genres = this._parseGenreList($);
-    return this._buildResponse('genreList', url, { genres });
+    const $ = cheerio.load(await this._html(url));
+    return this._wrap('genreList', url, { genres: this._genres($) });
   }
 
   async genre(slug, page = 1) {
     const url = page === 1 ? this.base + `/genres/${slug}/` : this.base + `/genres/${slug}/page/${page}/`;
-    const html = await this._fetchHTML(url);
-    const $ = cheerio.load(html);
+    const $ = cheerio.load(await this._html(url));
     const items = [];
-    $('.col-anime-con').each((i, el) => {
-      const card = this._parseCardColAnime($, el);
-      if (card) items.push(card);
-    });
-    const pagination = this._parsePagination($);
-    return this._buildResponse('genre', url, { slug, pagination, items });
+    $('.col-anime-con').each((i, el) => { const c = this._cardCol($, el); if (c) items.push(c); });
+    return this._wrap('genre', url, { slug, pagination: this._pag($), items });
   }
 
   async jadwalRilis() {
     const url = this.base + '/jadwal-rilis/';
-    const html = await this._fetchHTML(url);
-    const $ = cheerio.load(html);
-    const schedule = this._parseSchedule($);
-    return this._buildResponse('jadwalRilis', url, { schedule });
+    const $ = cheerio.load(await this._html(url));
+    return this._wrap('jadwalRilis', url, { schedule: this._sched($) });
   }
 
-  async search(query) {
-    const url = `${this.base}/?s=${encodeURIComponent(query)}&post_type=anime`;
-    const html = await this._fetchHTML(url);
-    const $ = cheerio.load(html);
+  async search(q) {
+    const url = `${this.base}/?s=${encodeURIComponent(q)}&post_type=anime`;
+    const $ = cheerio.load(await this._html(url));
     const items = [];
     $('.chivsrc li').each((i, el) => {
-      const $el = $(el);
-      const link = $el.find('h2 a').attr('href');
-      const title = $el.find('h2 a').text().trim();
-      const poster = $el.find('img').attr('src') || null;
-      const genres = $el.find('.set:first-child a').map((_, a) => $(a).text()).get() || [];
-      const status = $el.find('.set:nth-child(2)').text().replace('Status :', '').trim() || null;
-      const ratingEl = $el.find('.set:contains("Rating")');
-      const rating = ratingEl.length ? ratingEl.text().replace('Rating :', '').trim() : null;
-      if (link && title) {
-        items.push({
-          title,
-          url: link.startsWith('http') ? link : this.base + link,
-          poster,
-          genres,
-          status,
-          rating
-        });
-      }
+      const $e = $(el);
+      const link = $e.find('h2 a').attr('href');
+      const title = $e.find('h2 a').text().trim();
+      if (!link || !title) return;
+      const rEl = $e.find('.set:contains("Rating")');
+      items.push({
+        title,
+        url: link.startsWith('http') ? link : this.base + link,
+        poster: $e.find('img').attr('src') || null,
+        genres: $e.find('.set:first-child a').map((_, a) => $(a).text()).get(),
+        status: $e.find('.set:nth-child(2)').text().replace('Status :', '').trim() || null,
+        rating: rEl.length ? rEl.text().replace('Rating :', '').trim() : null
+      });
     });
-    return this._buildResponse('search', url, { query, items });
+    return this._wrap('search', url, { query: q, items });
   }
 
   async detail(slug) {
     const url = this.base + `/anime/${slug}/`;
-    const html = await this._fetchHTML(url);
-    const $ = cheerio.load(html);
-    const title = $('.jdlrx h1').text().trim() || $('title').text().trim();
-    const poster = $('.fotoanime img').attr('src') || null;
-    const sinopsis = $('.sinopc p').text().trim() || null;
+    const $ = cheerio.load(await this._html(url));
     const info = {};
     $('.infozin .infozingle p').each((i, el) => {
-      const $el = $(el);
-      const text = $el.text().trim();
-      if (text.includes('Genre')) {
-        const genreLinks = $el.find('a').map((_, a) => $(a).text()).get();
-        info.genre = genreLinks.length ? genreLinks.join(', ') : null;
+      const $e = $(el);
+      const t = $e.text().trim();
+      if (t.includes('Genre')) {
+        const g = $e.find('a').map((_, a) => $(a).text()).get();
+        info.genre = g.length ? g.join(', ') : null;
         return;
       }
-      const parts = text.split(':');
-      if (parts.length >= 2) {
-        const key = parts[0].replace(/\s/g, '_').toLowerCase();
-        const value = parts.slice(1).join(':').trim();
-        if (key) info[key] = value;
+      const p = t.split(':');
+      if (p.length >= 2) {
+        const k = p[0].replace(/\s/g, '_').toLowerCase();
+        if (k) info[k] = p.slice(1).join(':').trim();
       }
     });
-    const episodes = this._parseEpisodeList($);
-    const recommendations = [];
+    const recs = [];
     $('.isi-recommend-anime-series .isi-konten').each((i, el) => {
-      const $el = $(el);
-      const link = $el.find('.judul-anime a').attr('href');
-      const titleRec = $el.find('.judul-anime a').text().trim();
-      const posterRec = $el.find('.gambar-konten img').attr('src') || null;
-      if (link && titleRec) {
-        recommendations.push({
-          title: titleRec,
-          url: link.startsWith('http') ? link : this.base + link,
-          poster: posterRec
-        });
-      }
+      const $e = $(el);
+      const link = $e.find('.judul-anime a').attr('href');
+      const t = $e.find('.judul-anime a').text().trim();
+      if (link && t) recs.push({ title: t, url: link.startsWith('http') ? link : this.base + link, poster: $e.find('.gambar-konten img').attr('src') || null });
     });
-    return this._buildResponse('detail', url, {
-      title,
-      poster,
-      sinopsis,
+    return this._wrap('detail', url, {
+      title: $('.jdlrx h1').text().trim() || $('title').text().trim(),
+      poster: $('.fotoanime img').attr('src') || null,
+      sinopsis: $('.sinopc p').text().trim() || null,
       info,
-      episodes,
-      recommendations
+      episodes: this._epList($),
+      recommendations: recs
     });
+  }
+
+  _dl($) {
+    const out = [];
+    $('.download ul').each((i, ul) => {
+      const $u = $(ul);
+      const group = $u.prev('h4').text().trim() || $u.prev('strong').text().trim() || 'Download';
+      const items = [];
+      $u.find('li').each((j, li) => {
+        const $l = $(li);
+        const links = [];
+        $l.find('a').each((k, a) => { const $a = $(a); const h = $a.attr('href'); if (h) links.push({ host: $a.text().trim(), url: h }); });
+        if (links.length) items.push({ resolution: $l.find('strong').text().trim() || null, size: $l.find('i').text().trim() || null, links });
+      });
+      if (items.length) out.push({ group, items });
+    });
+    return out;
+  }
+
+  _nav($) {
+    return {
+      prev: $('.prevnext .flir a:first-child').attr('href') || null,
+      all: $('.prevnext .flir a:contains("See All")').attr('href') || null,
+      next: $('.prevnext .flir a:last-child').attr('href') || null
+    };
   }
 
   async episode(slug) {
     const url = this.base + `/episode/${slug}/`;
-    const html = await this._fetchHTML(url);
+    const html = await this._html(url);
     const $ = cheerio.load(html);
-    const title = $('h1.posttl').text().trim() || $('title').text().trim();
-    const streams = await this._extractStreams(html);
-    const downloads = [];
-    $('.download ul').each((i, ul) => {
-      const $ul = $(ul);
-      const group = $ul.prev('h4').text().trim() || $ul.prev('strong').text().trim() || 'Download';
-      const items = [];
-      $ul.find('li').each((j, li) => {
-        const $li = $(li);
-        const resolution = $li.find('strong').text().trim() || null;
-        const size = $li.find('i').text().trim() || null;
-        const links = [];
-        $li.find('a').each((k, a) => {
-          const $a = $(a);
-          links.push({
-            host: $a.text().trim(),
-            url: $a.attr('href')
-          });
-        });
-        if (links.length) items.push({ resolution, size, links });
-      });
-      if (items.length) downloads.push({ group, items });
-    });
-    const nav = {
-      prev: $('.prevnext .flir a:first-child').attr('href') || null,
-      all: $('.prevnext .flir a:contains("See All")').attr('href') || null,
-      next: $('.prevnext .flir a:last-child').attr('href') || null
+    const streams = await this._streams(html);
+    const data = {
+      title: $('h1.posttl').text().trim() || $('title').text().trim(),
+      streams,
+      downloads: this._dl($),
+      nav: this._nav($)
     };
-    const otherEpisodes = this._parseEpisodeList($);
-    const data = { title, streams, downloads, nav };
-    if (otherEpisodes.length) data.otherEpisodes = otherEpisodes;
-    return this._buildResponse('episode', url, data);
+    const other = this._epList($);
+    if (other.length) data.otherEpisodes = other;
+    return this._wrap('episode', url, data);
   }
 
   async batch(slug) {
     const url = this.base + `/lengkap/${slug}/`;
-    const html = await this._fetchHTML(url);
-    const $ = cheerio.load(html);
-    const title = $('.jdlrx h1').text().trim() || $('title').text().trim();
-    const downloads = [];
-    $('.download ul').each((i, ul) => {
-      const $ul = $(ul);
-      const group = $ul.prev('h4').text().trim() || $ul.prev('strong').text().trim() || 'Batch';
-      const items = [];
-      $ul.find('li').each((j, li) => {
-        const $li = $(li);
-        const resolution = $li.find('strong').text().trim() || null;
-        const size = $li.find('i').text().trim() || null;
-        const links = [];
-        $li.find('a').each((k, a) => {
-          const $a = $(a);
-          links.push({
-            host: $a.text().trim(),
-            url: $a.attr('href')
-          });
-        });
-        if (links.length) items.push({ resolution, size, links });
-      });
-      if (items.length) downloads.push({ group, items });
-    });
-    return this._buildResponse('batch', url, { title, downloads });
+    const $ = cheerio.load(await this._html(url));
+    return this._wrap('batch', url, { title: $('.jdlrx h1').text().trim() || $('title').text().trim(), downloads: this._dl($) });
   }
 
   async watch(slug) {
     const url = this.base + `/episode/${slug}/`;
-    const html = await this._fetchHTML(url);
+    const html = await this._html(url);
     const $ = cheerio.load(html);
-    const title = $('h1.posttl').text().trim() || $('title').text().trim();
-    const streams = await this._extractStreams(html);
-    const downloads = [];
-    $('.download ul').each((i, ul) => {
-      const $ul = $(ul);
-      const group = $ul.prev('h4').text().trim() || $ul.prev('strong').text().trim() || 'Download';
-      const items = [];
-      $ul.find('li').each((j, li) => {
-        const $li = $(li);
-        const resolution = $li.find('strong').text().trim() || null;
-        const size = $li.find('i').text().trim() || null;
-        const links = [];
-        $li.find('a').each((k, a) => {
-          const $a = $(a);
-          links.push({
-            host: $a.text().trim(),
-            url: $a.attr('href')
-          });
-        });
-        if (links.length) items.push({ resolution, size, links });
-      });
-      if (items.length) downloads.push({ group, items });
+    return this._wrap('watch', url, {
+      title: $('h1.posttl').text().trim() || $('title').text().trim(),
+      streams: await this._streams(html),
+      downloads: this._dl($),
+      nav: this._nav($)
     });
-    const nav = {
-      prev: $('.prevnext .flir a:first-child').attr('href') || null,
-      all: $('.prevnext .flir a:contains("See All")').attr('href') || null,
-      next: $('.prevnext .flir a:last-child').attr('href') || null
-    };
-    return this._buildResponse('watch', url, { title, streams, downloads, nav });
-  }
-
-  resetCookie() {
-    this.cookieJar.clear();
   }
 }
 
-export default [
-  {
-    name: 'Otakudesu — Home (Episode Terbaru)',
-    category: 'anime',
-    path: '/anime/otakudesu/home',
-    method: ['GET'],
-    description: 'Home Otakudesu: episode terbaru dari homepage.',
-    params: {},
-    cache: 120,
-    execute: async () => {
-      const scraper = new OtakudesuScraper();
-      return scraper.home();
-    }
+export default {
+  name: 'Otakudesu',
+  category: 'anime',
+  method: ['GET'],
+  description: 'Multi-endpoint Otakudesu via query.action.',
+  params: {
+    action: { type: 'string', required: true, description: 'home|ongoing|complete|genrelist|genre|jadwal|search|detail|episode|batch|watch' },
+    page: { type: 'number', required: false, description: 'Nomor halaman (untuk ongoing, complete, genre).' },
+    slug: { type: 'string', required: false, description: 'Slug anime / genre / episode (wajib untuk genre, detail, episode, batch, watch).' },
+    query: { type: 'string', required: false, description: 'Kata kunci (wajib untuk search).' }
   },
-  {
-    name: 'Otakudesu — Ongoing',
-    category: 'anime',
-    path: '/anime/otakudesu/ongoing',
-    method: ['GET'],
-    description: 'Anime berstatus ongoing (sedang tayang).',
-    params: {
-      page: { type: 'number', required: false, description: 'Nomor halaman, mulai 1' }
-    },
-    cache: 120,
-    execute: async ({ query }) => {
-      const scraper = new OtakudesuScraper();
-      return scraper.ongoing(Number(query.page) || 1);
-    }
-  },
-  {
-    name: 'Otakudesu — Complete',
-    category: 'anime',
-    path: '/anime/otakudesu/complete',
-    method: ['GET'],
-    description: 'Anime berstatus complete (selesai tayang).',
-    params: {
-      page: { type: 'number', required: false, description: 'Nomor halaman, mulai 1' }
-    },
-    cache: 120,
-    execute: async ({ query }) => {
-      const scraper = new OtakudesuScraper();
-      return scraper.complete(Number(query.page) || 1);
-    }
-  },
-  {
-    name: 'Otakudesu — Daftar Genre',
-    category: 'anime',
-    path: '/anime/otakudesu/genrelist',
-    method: ['GET'],
-    description: 'Daftar semua genre yang tersedia di Otakudesu.',
-    params: {},
-    cache: 3600,
-    execute: async () => {
-      const scraper = new OtakudesuScraper();
-      return scraper.genreList();
-    }
-  },
-  {
-    name: 'Otakudesu — Genre',
-    category: 'anime',
-    path: '/anime/otakudesu/genre',
-    method: ['GET'],
-    description: 'Anime berdasarkan genre (slug genre).',
-    params: {
-      slug: { type: 'string', required: true, description: 'Slug genre, contoh: comedy, action' },
-      page: { type: 'number', required: false, description: 'Nomor halaman, mulai 1' }
-    },
-    cache: 120,
-    execute: async ({ query }) => {
-      const scraper = new OtakudesuScraper();
-      return scraper.genre(query.slug, Number(query.page) || 1);
-    }
-  },
-  {
-    name: 'Otakudesu — Jadwal Rilis',
-    category: 'anime',
-    path: '/anime/otakudesu/jadwal',
-    method: ['GET'],
-    description: 'Jadwal rilis mingguan anime.',
-    params: {},
-    cache: 600,
-    execute: async () => {
-      const scraper = new OtakudesuScraper();
-      return scraper.jadwalRilis();
-    }
-  },
-  {
-    name: 'Otakudesu — Search',
-    category: 'anime',
-    path: '/anime/otakudesu/search',
-    method: ['GET'],
-    description: 'Cari anime berdasarkan kata kunci.',
-    params: {
-      query: { type: 'string', required: true, description: 'Kata kunci pencarian' }
-    },
-    cache: 120,
-    execute: async ({ query }) => {
-      const scraper = new OtakudesuScraper();
-      return scraper.search(query.query);
-    }
-  },
-  {
-    name: 'Otakudesu — Detail Anime',
-    category: 'anime',
-    path: '/anime/otakudesu/detail',
-    method: ['GET'],
-    description: 'Detail anime + daftar episode (slug dari url /anime/{slug}/).',
-    params: {
-      slug: { type: 'string', required: true, description: 'Slug anime' }
-    },
-    cache: 180,
-    execute: async ({ query }) => {
-      const scraper = new OtakudesuScraper();
-      return scraper.detail(query.slug);
-    }
-  },
-  {
-    name: 'Otakudesu — Episode',
-    category: 'anime',
-    path: '/anime/otakudesu/episode',
-    method: ['GET'],
-    description: 'Episode lengkap: stream, download, navigasi episode.',
-    params: {
-      slug: { type: 'string', required: true, description: 'Slug episode' }
-    },
-    cache: 120,
-    execute: async ({ query }) => {
-      const scraper = new OtakudesuScraper();
-      return scraper.episode(query.slug);
-    }
-  },
-  {
-    name: 'Otakudesu — Batch',
-    category: 'anime',
-    path: '/anime/otakudesu/batch',
-    method: ['GET'],
-    description: 'Batch download lengkap anime.',
-    params: {
-      slug: { type: 'string', required: true, description: 'Slug batch' }
-    },
-    cache: 120,
-    execute: async ({ query }) => {
-      const scraper = new OtakudesuScraper();
-      return scraper.batch(query.slug);
-    }
-  },
-  {
-    name: 'Otakudesu — Watch',
-    category: 'anime',
-    path: '/anime/otakudesu/watch',
-    method: ['GET'],
-    description: 'Ringan: hanya title + stream untuk menonton.',
-    params: {
-      slug: { type: 'string', required: true, description: 'Slug episode' }
-    },
-    cache: 120,
-    execute: async ({ query }) => {
-      const scraper = new OtakudesuScraper();
-      return scraper.watch(query.slug);
+  cache: 60,
+  timeout: 60000,
+  execute: async ({ query }) => {
+    const s = new OtakudesuScraper();
+    const action = String(query?.action || '').toLowerCase();
+    const page = parseInt(query?.page) || 1;
+    switch (action) {
+      case 'home': return s.home();
+      case 'ongoing': return s.ongoing(page);
+      case 'complete': return s.complete(page);
+      case 'genrelist': return s.genreList();
+      case 'genre': if (!query.slug) throw new Error('param `slug` wajib'); return s.genre(query.slug, page);
+      case 'jadwal': return s.jadwalRilis();
+      case 'search': if (!query.query) throw new Error('param `query` wajib'); return s.search(query.query);
+      case 'detail': if (!query.slug) throw new Error('param `slug` wajib'); return s.detail(query.slug);
+      case 'episode': if (!query.slug) throw new Error('param `slug` wajib'); return s.episode(query.slug);
+      case 'batch': if (!query.slug) throw new Error('param `slug` wajib'); return s.batch(query.slug);
+      case 'watch': if (!query.slug) throw new Error('param `slug` wajib'); return s.watch(query.slug);
+      default: throw new Error(`action tidak dikenal: "${action}"`);
     }
   }
-];
+};
