@@ -1,0 +1,24 @@
+{
+  "name": "api-verudesu",
+  "version": "1.0.0",
+  "description": "Anime API serverless ala VeruProject — Otakudesu & Samehadaku",
+  "author": "VeruProject",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "node index.js",
+    "deploy:vercel": "vercel --prod",
+    "deploy:cf": "wrangler deploy"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "chokidar": "^4.0.3",
+    "cors": "^2.8.5",
+    "express": "^4.21.2"
+  },
+  "devDependencies": {},
+  "optionalDependencies": {
+    "wrangler": "^4.14.0"
+  }
+}
