@@ -12,7 +12,7 @@ import {
 import otakudesu from "./src/plugins/anime/otakudesu.js";
 import samehadaku from "./src/plugins/anime/samehadaku.js";
 
-// Satu file plugin = satu bundle array of routes.
+// Satu file plugin = satu bundle (array of routes).
 // Path di-derive dari nama provider + slug dari `name` route.
 const BUNDLES = [
   { provider: "otakudesu", routes: otakudesu },
@@ -26,9 +26,23 @@ const slugify = (s) =>
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 
+// Terima array, single-route object, atau { default: ... } berlapis.
+const normalize = (exp) => {
+  if (Array.isArray(exp)) return exp;
+  if (exp && typeof exp === "object" && typeof exp.execute === "function") return [exp];
+  if (exp && typeof exp === "object" && exp.default) return normalize(exp.default);
+  return [];
+};
+
 const ROUTES = [];
 for (const { provider, routes } of BUNDLES) {
-  for (const r of routes) {
+  const list = normalize(routes);
+  if (!list.length) {
+    console.warn(`[warn] bundle "${provider}" tidak meng-export array route — di-skip`);
+    continue;
+  }
+  for (const r of list) {
+    if (!r?.execute) continue;
     ROUTES.push([r, `/anime/${provider}/${slugify(r.name)}`]);
   }
 }
