@@ -5,23 +5,25 @@ import express from "express";
 import cors from "cors";
 import {
   plugins,
-  loadAllPlugins,
-  resolveSingleRouteOnDemand,
   sendSuccess,
   sendError,
   extractAndValidateInput,
   getCache,
   setCache
-} from "./function.js";
+} from "./core.js";
+import { loadAllPlugins, resolveSingleRouteOnDemand } from "./loader.js";
+import { makeSecurity } from "./security.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
+app.disable("x-powered-by");
 app.set("json spaces", 2);
 
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
-app.use(express.urlencoded({ extended: true, limit: "2mb" }));
+app.use(makeSecurity());
+app.use(express.json({ limit: "100kb" }));
+app.use(express.urlencoded({ extended: true, limit: "100kb" }));
 
 app.use((req, res, next) => {
   res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");

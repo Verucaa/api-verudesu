@@ -24,8 +24,8 @@ Serverless-friendly REST API khusus **anime** dengan engine plugin ringan. Data 
 
 | Fitur | Keterangan |
 |---|---|
-| Engine plugin | Satu file = banyak endpoint (export array) |
-| Router otomatis | Path dibentuk dari `kategori/nama-file` |
+| Engine plugin | Satu file = satu endpoint (`export default`) |
+| Path otomatis | Di-*derive* dari `kategori/provider/nama-file` |
 | Validasi param | `string`, `number`, `boolean`, required opsional |
 | Cache & timeout | Per-endpoint via `cache` & `timeout` di file plugin |
 | UI mega | Landing Jepang, daftar endpoint, tester langsung, terminal |
@@ -167,59 +167,96 @@ fmt.Println(string(body))
 
 ## ➕ Menambah Endpoint Baru
 
-1. Buat file baru di `src/plugins/<kategori>/<nama>.js` (atau tambah di file yang sudah ada).
-2. Olahnya **satu plugin per endpoint**, atau **array** bila ingin banyak endpoint dalam satu file:
+Sistem plugin mengikuti pola **api-simple**: **satu file = satu endpoint**, dan file disimpan di
+`src/plugins/<kategori>/<provider>/<nama>.js`. Path bisa di-*derive* dari lokasi file, atau
+diregistrasi eksplisit (untuk Cloudflare Workers).
+
+### Langkah 1 — Buat file plugin
+
+Contoh menambah provider `kusonime` dengan 2 endpoint:
 
 ```js
-// src/plugins/anime/kusonime.js
-const handler = (title) => ({ judul: title });
+// src/plugins/anime/kusonime/karakter.js
+export default {
+  name: "Kusonime — Karakter",
+  category: "anime",
+  method: ["GET"],
+  description: "Cari karakter anime.",
+  params: { nama: { type: "string", required: true, description: "Nama karakter" } },
+  cache: 60,                 // detik; null = tanpa cache
+  timeout: 60000,            // ms (default 60000)
+  execute: async ({ query }) => ({ judul: query.nama })
+};
+```
 
-export default [
-  {
-    name: "Kusonime — Karakter",
-    category: "anime",
-    path: "/anime/kusonime/karakter",
-    method: ["GET"],
-    description: "Cari karakter anime.",
-    params: { nama: { type: "string", required: true, description: "Nama karakter" } },
-    cache: 60,
-    execute: async ({ query }) => handler(query.nama)
-  },
-  {
-    name: "Kusonime — Jadwal",
-    category: "anime",
-    path: "/anime/kusonime/jadwal",
-    method: ["GET"],
-    description: "Jadwal rilis.",
-    params: {},
-    cache: 300,
-    execute: async () => ({ list: [] })
-  }
+```js
+// src/plugins/anime/kusonime/jadwal.js
+export default {
+  name: "Kusonime — Jadwal",
+  category: "anime",
+  method: ["GET"],
+  description: "Jadwal rilis.",
+  params: {},
+  cache: 300,
+  execute: async () => ({ list: [] })
+};
+```
+
+Beberapa endpoint yang berbagi logika scraper boleh import helper bersama. Simpan di
+`src/plugins/anime/_lib.js` (tanpa `export default` yang punya `execute` → otomatis **di-skip**
+loader, tidak dianggap endpoint):
+
+```js
+// src/plugins/anime/_lib.js
+export class KusonimeScraper { /* ... */ }
+```
+
+```js
+// src/plugins/anime/kusonime/karakter.js
+import { KusonimeScraper } from "../_lib.js";
+export default {
+  /* ... */
+  execute: async ({ query }) => new KusonimeScraper().carakter(query.nama)
+};
+```
+
+### Langkah 2 — Daftar di worker.js (khusus Cloudflare Workers)
+
+Worker tidak bisa scan filesystem, jadi endpoint didaftarkan eksplisit sebagai pasangan
+`[handler, path]`:
+
+```js
+// worker.js
+import kusonimeKarakter from "./src/plugins/anime/kusonime/karakter.js";
+import kusonimeJadwal from "./src/plugins/anime/kusonime/jadwal.js";
+
+const ROUTES = [
+  /* ...route lama... */
+  [kusonimeKarakter, "/anime/kusonime/karakter"],
+  [kusonimeJadwal, "/anime/kusonime/jadwal"]
 ];
 ```
+
+Selesai — di **Node lokal / Vercel** endpoint langsung terbaca otomatis dari filesystem, di
+**Worker** ikut ter-bundle karena import statis.
 
 Aturan penting:
 
 | Aturan | Keterangan |
 |---|---|
-| `path` | Wajib unik. Segmen ke-2 setelah kategori = **provider** → otomatis jadi judul grup di UI. |
+| `path` di plugin file | Tidak perlu ditulis — di-*derive* (`/anime/kusonime/karakter`) atau dari pasangan `[handler, path]` di worker. |
 | `execute({ query, body })` | Wajib; balikkan `result` apa pun (JSON) atau throw `Error`. |
 | `method` | `GET` / `POST`. |
 | `params` | Validasi otomatis; `type` didukung: `string`, `number`, `boolean`. |
-| `cache` (detik) | Respons hasil di-cache di memori. Kosongkan untuk tanpa cache. |
+| `cache` (detik) | Respons di-cache di memori (shared: `core.js`). |
 | `timeout` (ms) | Default `60000`. |
+| File tanpa `execute` | Otomatis di-skip (mis. `_lib.js`), boleh berisi class/helper bersama. |
 
 Behavior:
 
 - **Lokal** (`npm run dev`) → watcher memuat ulang file berubah otomatis.
 - **Vercel** → daftar endpoint/`/api/endpoints` memuat ulang per request (engine `resolveSingleRouteOnDemand`).
-- **Cloudflare Workers** → tambahkan ke daftar registrasi di `worker.js` agar ikut ter-bundle:
-
-```js
-import kusonime from "./src/plugins/anime/kusonime.js";
-for (const plugin of kusonime) registerPlugin(plugin, plugin.path);
-```
-
+- **Cloudflare Workers** → pastikan sudah didaftarkan di `ROUTES` `worker.js`.
 - **UI** → endpoint baru otomatis muncul di daftar dengan judul grup = provider (mis. "Kusonime"), dengan jarak antar-grup 64px.
 
 ---
@@ -257,14 +294,22 @@ Konfigurasi: `worker.js` + `wrangler.jsonc`. Asset UI disajikan otomatis dari fo
 ├── api/index.js          # Entry Vercel
 ├── public/index.html     # Landing page + UI tester (single file)
 ├── src/
+│   ├── core.js           # Inti runtime: registerPlugin, cache, validasi, rate-limit (CF-safe, tanpa node builtin)
+│   ├── loader.js         # Pemuat plugin dari filesystem (KHUSUS Node/Vercel, pakai node:fs)
+│   ├── security.js       # Middleware Express: rate-limit, header keamanan
 │   ├── app.js            # Server Express (lokal & Vercel)
-│   ├── function.js       # Engine plugin, cache, validasi
 │   ├── watcher.js        # Hot-reload plugin saat develop
 │   └── plugins/
 │       └── anime/
-│           ├── otakudesu.js   # 11 endpoint
-│           └── samehadaku.js  # 11 endpoint
-├── worker.js             # Entry Cloudflare Workers
+│           ├── _lib.js             # Scraper bersama (bukan endpoint, otomatis di-skip)
+│           ├── otakudesu/          # 11 file = 11 endpoint
+│           │   ├── home.js
+│           │   ├── search.js
+│           │   └── ...
+│           └── samehadaku/         # 11 file = 11 endpoint
+│               ├── home.js
+│               └── ...
+├── worker.js             # Entry Cloudflare Workers (import statis + daftar ROUTES)
 ├── wrangler.jsonc        # Konfigurasi Workers
 ├── vercel.json           # Konfigurasi Vercel
 └── index.js              # Entry lokal (npm start)

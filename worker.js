@@ -5,53 +5,126 @@ import {
   sendError,
   extractAndValidateInput,
   getCache,
-  setCache
-} from "./src/function.js";
+  setCache,
+  createRateLimiter
+} from "./src/core.js";
 
-import otakudesu from "./src/plugins/anime/otakudesu.js";
-import samehadaku from "./src/plugins/anime/samehadaku.js";
+import otakudesuHome from "./src/plugins/anime/otakudesu/home.js";
+import otakudesuOngoing from "./src/plugins/anime/otakudesu/ongoing.js";
+import otakudesuComplete from "./src/plugins/anime/otakudesu/complete.js";
+import otakudesuGenrelist from "./src/plugins/anime/otakudesu/genrelist.js";
+import otakudesuGenre from "./src/plugins/anime/otakudesu/genre.js";
+import otakudesuJadwal from "./src/plugins/anime/otakudesu/jadwal.js";
+import otakudesuSearch from "./src/plugins/anime/otakudesu/search.js";
+import otakudesuDetail from "./src/plugins/anime/otakudesu/detail.js";
+import otakudesuEpisode from "./src/plugins/anime/otakudesu/episode.js";
+import otakudesuBatch from "./src/plugins/anime/otakudesu/batch.js";
+import otakudesuWatch from "./src/plugins/anime/otakudesu/watch.js";
 
-for (const plugin of [...otakudesu, ...samehadaku]) {
-  registerPlugin(plugin, plugin.path);
+import samehadakuHome from "./src/plugins/anime/samehadaku/home.js";
+import samehadakuTerbaru from "./src/plugins/anime/samehadaku/terbaru.js";
+import samehadakuOngoing from "./src/plugins/anime/samehadaku/ongoing.js";
+import samehadakuCompleted from "./src/plugins/anime/samehadaku/completed.js";
+import samehadakuBatch from "./src/plugins/anime/samehadaku/batch.js";
+import samehadakuSchedule from "./src/plugins/anime/samehadaku/schedule.js";
+import samehadakuSearch from "./src/plugins/anime/samehadaku/search.js";
+import samehadakuDetail from "./src/plugins/anime/samehadaku/detail.js";
+import samehadakuEpisode from "./src/plugins/anime/samehadaku/episode.js";
+import samehadakuGenre from "./src/plugins/anime/samehadaku/genre.js";
+import samehadakuWatch from "./src/plugins/anime/samehadaku/watch.js";
+
+// Daftar endpoint eksplisit: [handler, routePath].
+// Tambah endpoint baru = buat file di src/plugins/... lalu daftarkan di sini.
+const ROUTES = [
+  [otakudesuHome, "/anime/otakudesu/home"],
+  [otakudesuOngoing, "/anime/otakudesu/ongoing"],
+  [otakudesuComplete, "/anime/otakudesu/complete"],
+  [otakudesuGenrelist, "/anime/otakudesu/genrelist"],
+  [otakudesuGenre, "/anime/otakudesu/genre"],
+  [otakudesuJadwal, "/anime/otakudesu/jadwal"],
+  [otakudesuSearch, "/anime/otakudesu/search"],
+  [otakudesuDetail, "/anime/otakudesu/detail"],
+  [otakudesuEpisode, "/anime/otakudesu/episode"],
+  [otakudesuBatch, "/anime/otakudesu/batch"],
+  [otakudesuWatch, "/anime/otakudesu/watch"],
+  [samehadakuHome, "/anime/samehadaku/home"],
+  [samehadakuTerbaru, "/anime/samehadaku/terbaru"],
+  [samehadakuOngoing, "/anime/samehadaku/ongoing"],
+  [samehadakuCompleted, "/anime/samehadaku/completed"],
+  [samehadakuBatch, "/anime/samehadaku/batch"],
+  [samehadakuSchedule, "/anime/samehadaku/schedule"],
+  [samehadakuSearch, "/anime/samehadaku/search"],
+  [samehadakuDetail, "/anime/samehadaku/detail"],
+  [samehadakuEpisode, "/anime/samehadaku/episode"],
+  [samehadakuGenre, "/anime/samehadaku/genre"],
+  [samehadakuWatch, "/anime/samehadaku/watch"]
+];
+
+for (const [handler, routePath] of ROUTES) {
+  registerPlugin(handler, routePath);
 }
 
-const createRateLimiter = (max, windowMs, maxEntries = 5000) => {
-  const hits = new Map();
-  return {
-    allow(key) {
-      const now = Date.now();
-      if (hits.size >= maxEntries) {
-        for (const [k, e] of hits) if (now >= e.resetAt) hits.delete(k);
-        if (hits.size >= maxEntries) hits.clear();
-      }
-      const entry = hits.get(key);
-      if (!entry || now >= entry.resetAt) {
-        hits.set(key, { count: 1, resetAt: now + windowMs });
-        return { ok: true, remaining: max - 1, resetMs: windowMs };
-      }
-      if (entry.count >= max) {
-        return { ok: false, remaining: 0, resetMs: entry.resetAt - now };
-      }
-      entry.count++;
-      return { ok: true, remaining: max - entry.count, resetMs: entry.resetAt - now };
-    }
-  };
+const SECURITY_HEADERS = {
+  "X-Content-Type-Options": "nosniff",
+  "X-Frame-Options": "DENY",
+  "Referrer-Policy": "no-referrer",
+  "Permissions-Policy": "geolocation=(), microphone=(), camera=()",
+  "X-XSS-Protection": "1; mode=block"
 };
 
-const createRes = () => {
-  const res = {
-    headers: {},
-    statusCode: 200,
-    body: "",
-    headersSent: false,
-    setHeader(k, v) { this.headers[k] = v; },
-    status(c) { this.statusCode = c; return this; },
-    send(b) { this.body = b; this.headersSent = true; return this; }
-  };
-  return res;
+const SECURITY_HEADERS_FULL = {
+  ...SECURITY_HEADERS,
+  "Access-Control-Allow-Origin": "*",
+  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+  "Access-Control-Allow-Headers": "content-type"
 };
+
+// Anti-spam: 10 request / menit / IP.
+// DDoS L3/L7 sejati ditangani edge Cloudflare (managed protection / zone rate limit);
+// limiter ini hanya guard level aplikasi.
+const RATE_LIMIT = 10;
+const MAX_BODY_BYTES = 100 * 1024;
+const rateLimiter = createRateLimiter(RATE_LIMIT, 60000);
+const clientKey = (request) =>
+  request.headers.get("cf-connecting-ip") ||
+  (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
+  "unknown";
+
+// Stub Response Express-compatible agar sendSuccess/sendError dari core.js bisa dipakai.
+const createRes = () => ({
+  headers: {},
+  statusCode: 200,
+  body: "",
+  headersSent: false,
+  setHeader(k, v) { this.headers[k] = v; },
+  status(c) { this.statusCode = c; return this; },
+  send(b) { this.body = b; this.headersSent = true; return this; }
+});
 
 const toResponse = (res) => new Response(res.body, { status: res.statusCode, headers: res.headers });
+
+const applySecurity = (resp) => {
+  const headers = new Headers(resp.headers);
+  for (const [k, v] of Object.entries(SECURITY_HEADERS_FULL)) headers.set(k, v);
+  return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers });
+};
+
+const guardRequest = (request) => {
+  if (!request.headers.get("user-agent")) {
+    return new Response(JSON.stringify({ status: false, message: "User-Agent diperlukan" }), {
+      status: 403,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  const len = Number(request.headers.get("content-length") || 0);
+  if (len > MAX_BODY_BYTES) {
+    return new Response(JSON.stringify({ status: false, message: "Request body terlalu besar" }), {
+      status: 413,
+      headers: { "Content-Type": "application/json" }
+    });
+  }
+  return null;
+};
 
 const getQuery = (url) => Object.fromEntries(url.searchParams.entries());
 
@@ -65,44 +138,14 @@ const readBody = async (request) => {
   try { return JSON.parse(text); } catch { return {}; }
 };
 
-const SECURITY_HEADERS = {
-  "X-Content-Type-Options": "nosniff",
-  "X-Frame-Options": "DENY",
-  "Referrer-Policy": "no-referrer",
-  "X-XSS-Protection": "1; mode=block",
-  "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
-  "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-  "Access-Control-Allow-Headers": "content-type"
+const withRateHeaders = (res, check) => {
+  res.setHeader("X-RateLimit-Limit", RATE_LIMIT);
+  res.setHeader("X-RateLimit-Remaining", check.remaining);
+  return res;
 };
 
-const rateLimiter = createRateLimiter(30, 60000);
-const clientKey = (request) =>
-  request.headers.get("cf-connecting-ip") ||
-  (request.headers.get("x-forwarded-for") || "").split(",")[0].trim() ||
-  "unknown";
-
-const applySecurity = (resp) => {
-  const headers = new Headers(resp.headers);
-  for (const [k, v] of Object.entries(SECURITY_HEADERS)) headers.set(k, v);
-  return new Response(resp.body, { status: resp.status, statusText: resp.statusText, headers });
-};
-
-const rateLimited = (request) => {
-  const res = createRes();
-  const { remaining, resetMs } = rateLimiter.allow(clientKey(request));
-  res.setHeader("X-RateLimit-Limit", 30);
-  res.setHeader("X-RateLimit-Remaining", remaining);
-  res.setHeader("Retry-After", Math.ceil(resetMs / 1000));
-  sendError(res, "Terlalu banyak permintaan. Coba lagi sebentar lagi.", 429);
-  return toResponse(res);
-};
-
-const finish = (res, remaining) => {
-  res.setHeader("X-RateLimit-Limit", 30);
-  res.setHeader("X-RateLimit-Remaining", remaining);
-  return applySecurity(toResponse(res));
-};
+const dataToResponse = (res, check) =>
+  applySecurity(toResponse(withRateHeaders(res, check)));
 
 export default {
   async fetch(request, env) {
@@ -110,9 +153,27 @@ export default {
     const parts = url.pathname.split("/").filter(Boolean).map((p) => decodeURIComponent(p));
     const routePath = "/" + parts.join("/");
 
+    if (routePath === "/api/endpoints" || parts.length >= 2) {
+      const bad = guardRequest(request);
+      if (bad) return applySecurity(bad);
+    }
+
+    const check = rateLimiter.allow(clientKey(request));
+    const rateLimited = () => {
+      const res = createRes();
+      res.setHeader("Retry-After", Math.max(1, Math.ceil(check.resetMs / 1000)));
+      if (request.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: SECURITY_HEADERS_FULL });
+      }
+      sendError(res, "Terlalu banyak permintaan. Coba lagi sebentar lagi.", 429);
+      return dataToResponse(res, check);
+    };
+
     if (routePath === "/api/endpoints") {
-      const { ok, remaining, resetMs } = rateLimiter.allow(clientKey(request));
-      if (!ok) return rateLimited(request);
+      if (!check.ok) return rateLimited();
+      if (request.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: SECURITY_HEADERS_FULL });
+      }
       const groups = {};
       for (const [path, data] of plugins.entries()) {
         const category = data.category || "general";
@@ -127,17 +188,16 @@ export default {
         });
       }
       const res = createRes();
-      res.setHeader("X-RateLimit-Limit", 30);
-      res.setHeader("X-RateLimit-Remaining", remaining);
-      if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: SECURITY_HEADERS });
       sendSuccess(res, { total: plugins.size, categories: Object.keys(groups), endpoints: groups });
-      return applySecurity(toResponse(res));
+      return dataToResponse(res, check);
     }
 
     if (parts.length >= 2) {
-      const { ok, remaining } = rateLimiter.allow(clientKey(request));
-      if (!ok) return rateLimited(request);
-      if (request.method === "OPTIONS") return new Response(null, { status: 204, headers: SECURITY_HEADERS });
+      if (!check.ok) return rateLimited();
+      if (request.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: SECURITY_HEADERS_FULL });
+      }
+
       const target = plugins.get(routePath);
       if (target) {
         const req = { method: request.method, url: request.url, query: getQuery(url), body: await readBody(request) };
@@ -145,13 +205,13 @@ export default {
 
         if (!target.method.includes(request.method)) {
           sendError(res, `Method ${request.method} tidak diizinkan`, 405);
-          return finish(res, remaining);
+          return dataToResponse(res, check);
         }
 
         const { input, error } = extractAndValidateInput(target.params, req);
         if (error) {
           sendError(res, error, 400);
-          return finish(res, remaining);
+          return dataToResponse(res, check);
         }
 
         const cacheKey = `${request.method}:${url.pathname}`;
@@ -159,7 +219,7 @@ export default {
           const cached = getCache(cacheKey);
           if (cached !== null) {
             sendSuccess(res, cached);
-            return finish(res, remaining);
+            return dataToResponse(res, check);
           }
         }
 
@@ -179,11 +239,12 @@ export default {
         } catch (err) {
           if (!res.headersSent) sendError(res, err.message || "Internal Server Error", 500);
         }
-        return finish(res, remaining);
+        return dataToResponse(res, check);
       }
+
       const notFound = createRes();
       sendError(notFound, `Endpoint '${routePath}' tidak ditemukan`, 404);
-      return finish(notFound, remaining);
+      return dataToResponse(notFound, check);
     }
 
     return applySecurity(await env.ASSETS.fetch(request));

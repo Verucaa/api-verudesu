@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import chokidar from "chokidar";
-import { getPluginsDir, loadPlugin, unloadPlugin } from "./function.js";
+import { getPluginsDir, loadPlugin, unloadPlugin } from "./loader.js";
 
 export const watchPlugins = () => {
   const dir = getPluginsDir();
