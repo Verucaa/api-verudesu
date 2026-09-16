@@ -9,56 +9,29 @@ import {
   createRateLimiter
 } from "./src/core.js";
 
-import otakudesuHome from "./src/plugins/anime/otakudesu/home.js";
-import otakudesuOngoing from "./src/plugins/anime/otakudesu/ongoing.js";
-import otakudesuComplete from "./src/plugins/anime/otakudesu/complete.js";
-import otakudesuGenrelist from "./src/plugins/anime/otakudesu/genrelist.js";
-import otakudesuGenre from "./src/plugins/anime/otakudesu/genre.js";
-import otakudesuJadwal from "./src/plugins/anime/otakudesu/jadwal.js";
-import otakudesuSearch from "./src/plugins/anime/otakudesu/search.js";
-import otakudesuDetail from "./src/plugins/anime/otakudesu/detail.js";
-import otakudesuEpisode from "./src/plugins/anime/otakudesu/episode.js";
-import otakudesuBatch from "./src/plugins/anime/otakudesu/batch.js";
-import otakudesuWatch from "./src/plugins/anime/otakudesu/watch.js";
+import otakudesu from "./src/plugins/anime/otakudesu.js";
+import samehadaku from "./src/plugins/anime/samehadaku.js";
 
-import samehadakuHome from "./src/plugins/anime/samehadaku/home.js";
-import samehadakuTerbaru from "./src/plugins/anime/samehadaku/terbaru.js";
-import samehadakuOngoing from "./src/plugins/anime/samehadaku/ongoing.js";
-import samehadakuCompleted from "./src/plugins/anime/samehadaku/completed.js";
-import samehadakuBatch from "./src/plugins/anime/samehadaku/batch.js";
-import samehadakuSchedule from "./src/plugins/anime/samehadaku/schedule.js";
-import samehadakuSearch from "./src/plugins/anime/samehadaku/search.js";
-import samehadakuDetail from "./src/plugins/anime/samehadaku/detail.js";
-import samehadakuEpisode from "./src/plugins/anime/samehadaku/episode.js";
-import samehadakuGenre from "./src/plugins/anime/samehadaku/genre.js";
-import samehadakuWatch from "./src/plugins/anime/samehadaku/watch.js";
-
-// Daftar endpoint eksplisit: [handler, routePath].
-// Tambah endpoint baru = buat file di src/plugins/... lalu daftarkan di sini.
-const ROUTES = [
-  [otakudesuHome, "/anime/otakudesu/home"],
-  [otakudesuOngoing, "/anime/otakudesu/ongoing"],
-  [otakudesuComplete, "/anime/otakudesu/complete"],
-  [otakudesuGenrelist, "/anime/otakudesu/genrelist"],
-  [otakudesuGenre, "/anime/otakudesu/genre"],
-  [otakudesuJadwal, "/anime/otakudesu/jadwal"],
-  [otakudesuSearch, "/anime/otakudesu/search"],
-  [otakudesuDetail, "/anime/otakudesu/detail"],
-  [otakudesuEpisode, "/anime/otakudesu/episode"],
-  [otakudesuBatch, "/anime/otakudesu/batch"],
-  [otakudesuWatch, "/anime/otakudesu/watch"],
-  [samehadakuHome, "/anime/samehadaku/home"],
-  [samehadakuTerbaru, "/anime/samehadaku/terbaru"],
-  [samehadakuOngoing, "/anime/samehadaku/ongoing"],
-  [samehadakuCompleted, "/anime/samehadaku/completed"],
-  [samehadakuBatch, "/anime/samehadaku/batch"],
-  [samehadakuSchedule, "/anime/samehadaku/schedule"],
-  [samehadakuSearch, "/anime/samehadaku/search"],
-  [samehadakuDetail, "/anime/samehadaku/detail"],
-  [samehadakuEpisode, "/anime/samehadaku/episode"],
-  [samehadakuGenre, "/anime/samehadaku/genre"],
-  [samehadakuWatch, "/anime/samehadaku/watch"]
+// Satu file plugin = satu bundle array of routes.
+// Path di-derive dari nama provider + slug dari `name` route.
+const BUNDLES = [
+  { provider: "otakudesu", routes: otakudesu },
+  { provider: "samehadaku", routes: samehadaku }
 ];
+
+const slugify = (s) =>
+  String(s)
+    .replace(/^[^—]*—\s*/, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+
+const ROUTES = [];
+for (const { provider, routes } of BUNDLES) {
+  for (const r of routes) {
+    ROUTES.push([r, `/anime/${provider}/${slugify(r.name)}`]);
+  }
+}
 
 for (const [handler, routePath] of ROUTES) {
   registerPlugin(handler, routePath);
@@ -214,7 +187,7 @@ export default {
           return dataToResponse(res, check);
         }
 
-        const cacheKey = `${request.method}:${url.pathname}`;
+        const cacheKey = `${request.method}:${url.pathname}${url.search}`;
         if (target.cache && request.method === "GET") {
           const cached = getCache(cacheKey);
           if (cached !== null) {
