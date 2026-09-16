@@ -116,7 +116,7 @@ async function request(method, url, body = null, headers = {}, retries = 5) {
 class OtakudesuScraper {
   constructor() {
     this.base = BASE_URL;
-    this.creator = 'rynaqrtz';
+    this.creator = 'VERUdesu API | VeruProject';
     this.cookieJar = new CookieJar();
   }
 
